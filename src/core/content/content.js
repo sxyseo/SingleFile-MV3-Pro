@@ -62,7 +62,10 @@ if (!bootstrap || !bootstrap.initializedSingleFile) {
 			message.method == "content.prompt" ||
 			message.method == "content.beginScrollTo" ||
 			message.method == "content.scrollTo" ||
-			message.method == "content.endScrollTo") {
+			message.method == "content.endScrollTo" ||
+			message.method == "content.realScroll" ||
+			message.method == "content.getPageHeight" ||
+			message.method == "content.isAtBottom") {
 			return onMessage(message);
 		}
 	});
@@ -147,6 +150,28 @@ async function onMessage(message) {
 			document.documentElement.style.setProperty("transform", transform);
 			document.documentElement.style.setProperty("overflow", overflow);
 			return {};
+		}
+		if (message.method == "content.realScroll") {
+			// 真正滚动页面，触发滚动加载
+			globalThis.scrollTo(0, message.y || 0);
+			// 等待一小段时间让页面响应滚动
+			await new Promise(resolve => setTimeout(resolve, 300));
+			return {};
+		}
+		if (message.method == "content.getPageHeight") {
+			// 获取页面总高度
+			return {
+				height: document.documentElement.scrollHeight
+			};
+		}
+		if (message.method == "content.isAtBottom") {
+			// 检查是否滚动到底部
+			const scrollPosition = globalThis.scrollY || globalThis.pageYOffset || document.documentElement.scrollTop;
+			const windowHeight = globalThis.innerHeight || document.documentElement.clientHeight;
+			const documentHeight = document.documentElement.scrollHeight;
+			return {
+				atBottom: scrollPosition + windowHeight >= documentHeight - 50
+			};
 		}
 	}
 }

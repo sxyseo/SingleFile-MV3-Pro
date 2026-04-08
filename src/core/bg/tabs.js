@@ -116,8 +116,15 @@ function onTabRemoved(tabId) {
 
 async function captureTab(tabId, options) {
 	const { width, height, scale = 1 } = options;
+
+	// 首先执行真正的滚动加载，确保所有延迟加载的内容都被加载
+	await scrollAndLoadDeferredContent(tabId, options);
+
+	// 重新获取页面高度，因为滚动后高度可能已经改变
+	const updatedHeight = await getPageHeight(tabId);
+
 	const canvasWidth = Math.floor(width * scale);
-	const canvasHeight = Math.floor(height * scale);
+	const canvasHeight = Math.floor(updatedHeight * scale);
 	let y = 0, canvas, canvasY = 0, scrollYStep, activeTabId;
 	if (browser.tabs.captureTab) {
 		scrollYStep = 4 * 1024;
@@ -130,12 +137,12 @@ async function captureTab(tabId, options) {
 	try {
 		canvas = new OffscreenCanvas(canvasWidth, canvasHeight);
 		const context = canvas.getContext("2d");
-		while (y < height) {
+		while (y < updatedHeight) {
 			let imageSrc;
 			if (browser.tabs.captureTab) {
 				imageSrc = await browser.tabs.captureTab(tabId, {
 					format: "png",
-					rect: { x: 0, y, width, height: Math.min(height - y, scrollYStep) }
+					rect: { x: 0, y, width, height: Math.min(updatedHeight - y, scrollYStep) }
 				});
 			} else {
 				await browser.tabs.sendMessage(tabId, { method: "content.scrollTo", y });
@@ -170,5 +177,65 @@ async function captureTab(tabId, options) {
 		await browser.tabs.sendMessage(tabId, { method: "content.endScrollTo" });
 		const blob = await canvas.convertToBlob({ type: "image/png" });
 		return await offscreen.getBlobURL(Array.from(new Uint8Array(await blob.arrayBuffer())));
+	}
+}
+
+// 新增：滚动加载延迟内容的函数
+async function scrollAndLoadDeferredContent(tabId, options) {
+	const scrollStep = options.innerHeight || 800;
+	const waitTime = 500; // 每次滚动后等待时间（毫秒）
+	const maxScrollAttempts = 50; // 最大滚动尝试次数，防止无限循环
+
+	try {
+		for (let attempt = 0; attempt < maxScrollAttempts; attempt++) {
+			// 获取当前页面高度
+			const currentHeight = await getPageHeight(tabId);
+			// 滚动到接近底部
+			await browser.tabs.sendMessage(tabId, {
+				method: "content.realScroll",
+				y: currentHeight - scrollStep
+			});
+			// 等待内容加载
+			await new Promise(resolve => setTimeout(resolve, waitTime));
+
+			// 检查是否到达底部
+			const atBottom = await checkIfAtBottom(tabId);
+			if (atBottom) {
+				// 再等待一次，确保所有内容都加载完成
+				await new Promise(resolve => setTimeout(resolve, waitTime * 2));
+				break;
+			}
+		}
+		// 滚动回顶部
+		await browser.tabs.sendMessage(tabId, { method: "content.realScroll", y: 0 });
+		await new Promise(resolve => setTimeout(resolve, waitTime));
+	} catch (error) {
+		console.error("Error during scroll and load:", error);
+		// 如果出错，确保滚动回顶部
+		try {
+			await browser.tabs.sendMessage(tabId, { method: "content.realScroll", y: 0 });
+		} catch (e) {
+			// ignore
+		}
+	}
+}
+
+// 获取页面高度
+async function getPageHeight(tabId) {
+	try {
+		const result = await browser.tabs.sendMessage(tabId, { method: "content.getPageHeight" });
+		return result.height || 800;
+	} catch (error) {
+		return 800;
+	}
+}
+
+// 检查是否滚动到底部
+async function checkIfAtBottom(tabId) {
+	try {
+		const result = await browser.tabs.sendMessage(tabId, { method: "content.isAtBottom" });
+		return result.atBottom || false;
+	} catch (error) {
+		return false;
 	}
 }
